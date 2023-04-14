@@ -39,6 +39,12 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--export_encoder",
+    action="store_true",
+    help="Specify to export encoder",
+)
+
+parser.add_argument(
     "--return-single-mask",
     action="store_true",
     help=(
@@ -93,6 +99,42 @@ parser.add_argument(
     ),
 )
 
+def run_export_encoder(sam, output: str, opset: int):
+    """
+    This function is adapted from https://github.com/facebookresearch/segment-anything/pull/29/files#diff-613d6ccf50e178a9a42c96dadcbda360731b3f87f79d7762b6961215a1a17cb7R158
+    """
+    dynamic_axes = {
+        "x": {0: "batch"},
+    }
+    dummy_inputs = {
+        "x": torch.randn(1, 3, 1024, 1024, dtype=torch.float),
+    }
+    _ = sam.image_encoder(**dummy_inputs)
+
+    output_names = ["image_embeddings"]
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+        warnings.filterwarnings("ignore", category=UserWarning)
+        print(f"Exporting onnx model to {output}...")
+        torch.onnx.export(
+            sam.image_encoder,
+            tuple(dummy_inputs.values()),
+            output,
+            export_params=True,
+            verbose=False,
+            opset_version=opset,
+            do_constant_folding=True,
+            input_names=list(dummy_inputs.keys()),
+            output_names=output_names,
+            # dynamic_axes=dynamic_axes,
+        )
+
+    if onnxruntime_exists:
+        ort_inputs = {k: to_numpy(v) for k, v in dummy_inputs.items()}
+        ort_session = onnxruntime.InferenceSession(output)
+        _ = ort_session.run(None, ort_inputs)
+        print("Encoder has successfully been run with ONNXRuntime.")
 
 def run_export(
     model_type: str,
@@ -103,9 +145,15 @@ def run_export(
     gelu_approximate: bool = False,
     use_stability_score: bool = False,
     return_extra_metrics=False,
+    export_encoder=False,
 ):
     print("Loading model...")
     sam = sam_model_registry[model_type](checkpoint=checkpoint)
+
+    if export_encoder:
+        from pathlib import Path
+        encoder_output_path = str(Path(output).parent / "sam_encoder_{}.onnx".format(model_type))
+        run_export_encoder(sam, encoder_output_path, opset)
 
     onnx_model = SamOnnxModel(
         model=sam,
@@ -184,6 +232,7 @@ if __name__ == "__main__":
         gelu_approximate=args.gelu_approximate,
         use_stability_score=args.use_stability_score,
         return_extra_metrics=args.return_extra_metrics,
+        export_encoder=args.export_encoder,
     )
 
     if args.quantize_out is not None:
