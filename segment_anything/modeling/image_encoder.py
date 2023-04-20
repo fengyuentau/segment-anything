@@ -321,6 +321,71 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
 
     return rel_pos_resized[relative_coords.long()]
 
+def einsum_extract_0(
+    x: torch.Tensor,
+    y: torch.Tensor
+) -> torch.Tensor:
+    """
+    Calculate einsum bhwc,hkc->bhwk using basic operations.
+
+    einsum bhwc,hkc->bhwk is equivalent to:
+    1. broadcast b: hkc --(broadcast)--> bhwkc
+    2. transpose a: bhwc --(transpose)--> cbhw
+    3. transpose b: bhwkc --(transpose)--> kcbhw
+    4. element-wise multiply a * b: cbhw * kcbhw --(mul)--> kcbhw
+    5. sum at axis=1: kcbhw --(ReduceSum)--> kbhw
+    6. transpose: kbhw --(transpose)--> bhwk
+    """
+
+    b, h, w, c = x.shape
+    h, k, c = y.shape
+
+    # _y = torch.broadcast_to(y, [b, h, w, k, c])
+    _y = y[None, :, None, :, :]
+    _y = _y.permute(3, 4, 0, 1, 2)
+    _x = x.permute(3, 0, 1, 2)
+
+    # mul
+    z = _x * _y
+
+    # sum @ axis=1
+    z = torch.sum(z, axis=1)
+
+    # transpose
+    return z.permute(1, 2, 3, 0)
+
+def einsum_extract_1(
+    x: torch.Tensor,
+    y: torch.Tensor
+) -> torch.Tensor:
+    """
+    Calculate einsum bhwc,wkc->bhwk using basic operations.
+
+    einsum bhwc,wkc->bhwk is equivalent to:
+    1. broadcast b: wkc --(broadcast)--> bhwkc
+    2. transpose a: bhwc --(transpose)--> cbhw
+    3. transpose b: bhwkc --(transpose)--> kcbhw
+    4. element-wise multiply a * b: cbhw * kcbhw --(mul)--> kcbhw
+    5. sum at axis=1: kcbhw --(ReduceSum)--> kbhw
+    6. transpose: kbhw --(transpose)--> bhwk
+    """
+
+    b, h, w, c = x.shape
+    w, k, c = y.shape
+
+    # _y = torch.broadcast_to(y, [b, h, w, k, c])
+    _y = y[None, None, :, :, :]
+    _y = _y.permute(3, 4, 0, 1, 2)
+    _x = x.permute(3, 0, 1, 2)
+
+    # mul
+    z = _x * _y
+
+    # sum @ axis=1
+    z = torch.sum(z, axis=1)
+
+    # transpose
+    return z.permute(1, 2, 3, 0)
 
 def add_decomposed_rel_pos(
     attn: torch.Tensor,
@@ -351,8 +416,10 @@ def add_decomposed_rel_pos(
 
     B, _, dim = q.shape
     r_q = q.reshape(B, q_h, q_w, dim)
-    rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
-    rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
+    # rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
+    rel_h = einsum_extract_0(r_q, Rh)
+    # rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
+    rel_w = einsum_extract_1(r_q, Rw)
 
     attn = (
         attn.view(B, q_h, q_w, k_h, k_w) + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]
