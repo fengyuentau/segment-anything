@@ -9,6 +9,28 @@ import torch.nn as nn
 
 from typing import Type
 
+class MLPBlockGEMM(nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        mlp_dim: int,
+        act: Type[nn.Module] = nn.GELU,
+    ) -> None:
+        super().__init__()
+        self.lin1 = nn.Linear(embedding_dim, mlp_dim)
+        self.lin2 = nn.Linear(mlp_dim, embedding_dim)
+        self.act = act()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, h, w, _ = x.shape
+        x = x.reshape(-1, x.shape[-1])
+        x = self.lin1(x)
+        x = x.reshape(b, h, w, -1)
+        x = self.act(x)
+        x = x.reshape(-1, x.shape[-1])
+        x = self.lin2(x)
+        x = x.reshape(b, h, w, -1)
+        return x
 
 class MLPBlock(nn.Module):
     def __init__(
