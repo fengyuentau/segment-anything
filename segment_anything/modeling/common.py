@@ -58,8 +58,14 @@ class LayerNorm2d(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = x.shape
         u = x.mean(1, keepdim=True)
         s = (x - u).pow(2).mean(1, keepdim=True)
         x = (x - u) / torch.sqrt(s + self.eps)
-        x = self.weight[:, None, None] * x + self.bias[:, None, None]
+        self.weight_ = self.weight.data
+        self.weight_ = self.weight_[:, None, None].repeat(1, h, w)
+        self.bias_ = self.bias.data
+        self.bias_ = self.bias_[:, None, None].repeat(1, h, w)
+        # x = self.weight[:, None, None] * x + self.bias[:, None, None]
+        x = self.weight_ * x + self.bias_
         return x
